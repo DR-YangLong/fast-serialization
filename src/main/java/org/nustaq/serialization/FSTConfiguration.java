@@ -20,6 +20,7 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.ObjectCodec;
 import com.fasterxml.jackson.core.SerializableString;
 import com.fasterxml.jackson.core.io.IOContext;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
 import com.fasterxml.jackson.core.json.UTF8JsonGenerator;
 import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import org.nustaq.offheap.bytez.onheap.HeapBytez;
@@ -36,11 +37,13 @@ import java.lang.ref.SoftReference;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 
 /**
  * Created with IntelliJ IDEA.
@@ -62,7 +65,7 @@ public class FSTConfiguration {
      * if all attempts fail to find a class this guy is asked.
      * Can be used in case e.g. dynamic classes need get generated.
      */
-    public interface LastResortClassRessolver {
+    public interface LastResortClassResolver {
         public Class getClass( String clName );
     }
 
@@ -99,7 +102,7 @@ public class FSTConfiguration {
     FSTClassInstantiator instantiator = new FSTDefaultClassInstantiator();
 
     Object coderSpecific;
-    LastResortClassRessolver lastResortResolver;
+    LastResortClassResolver lastResortResolver;
 
     boolean forceClzInit = false; // always execute default fields init, even if no transients
 
@@ -158,7 +161,8 @@ public class FSTConfiguration {
     public void setName(String name) {
         this.name = name;
     }
-/////////////////////////////////////
+
+    /////////////////////////////////////
     // cross platform stuff only
 
     int cpAttrIdCount = 0;
@@ -256,7 +260,10 @@ public class FSTConfiguration {
     /**
      * create a json conf with given attributes. Note that shared refs = true for jason might be not as stable as for binary encodings
      * as fst relies on stream positions to identify objects within a given input, so any inbetween formatting will break proper reference
-     * resolution
+     * resolution.
+     *
+     * WARNING: use of sharedrefs = true is Deprecated as its flakey
+     *
      * @param prettyPrint
      * @param shareReferences
      * @return
@@ -266,6 +273,10 @@ public class FSTConfiguration {
             throw new RuntimeException("unsupported flag combination");
         }
         return createJsonConfiguration(prettyPrint,shareReferences,null);
+    }
+
+    public static FSTConfiguration createJsonConfiguration() {
+        return createJsonConfiguration(false,false);
     }
 
     protected static FSTConfiguration createJsonConfiguration(boolean prettyPrint, boolean shareReferences, ConcurrentHashMap<FieldKey,FSTClazzInfo.FSTFieldInfo> shared ) {
@@ -340,7 +351,7 @@ public class FSTConfiguration {
         conf.setCoderSpecific(fac);
         conf.setStreamCoderFactory(new JSonStreamCoderFactory(conf));
         conf.setShareReferences(shareReferences);
-        conf.setLastResortResolver(new LastResortClassRessolver() {
+        conf.setLastResortResolver(new LastResortClassResolver() {
             @Override
             public Class getClass(String clName) {
                 return Unknown.class;
@@ -466,7 +477,7 @@ public class FSTConfiguration {
         // for most cases don't register for subclasses as in many cases we'd like to fallback to JDK implementation
         // (e.g. TreeMap) in order to guarantee complete serialization
         reg.putSerializer(ArrayList.class, new FSTArrayListSerializer(), false);
-        reg.putSerializer(Vector.class, new FSTCollectionSerializer(), false);
+        reg.putSerializer(Vector.class, new FSTCollectionSerializer(), true);
         reg.putSerializer(LinkedList.class, new FSTCollectionSerializer(), false); // subclass should register manually
         reg.putSerializer(HashSet.class, new FSTCollectionSerializer(), false); // subclass should register manually
         reg.putSerializer(HashMap.class, new FSTMapSerializer(), false); // subclass should register manually
@@ -524,11 +535,11 @@ public class FSTConfiguration {
         return forceClzInit;
     }
 
-    public LastResortClassRessolver getLastResortResolver() {
+    public LastResortClassResolver getLastResortResolver() {
         return lastResortResolver;
     }
 
-    public void setLastResortResolver(LastResortClassRessolver lastResortResolver) {
+    public void setLastResortResolver(LastResortClassResolver lastResortResolver) {
         this.lastResortResolver = lastResortResolver;
     }
 
@@ -922,6 +933,8 @@ public class FSTConfiguration {
 
     protected FSTObjectInput getIn() {
         FSTObjectInput fstObjectInput = (FSTObjectInput) streamCoderFactory.getInput().get();
+        if ( fstObjectInput != null && fstObjectInput.isClosed() )
+            fstObjectInput = null;
         if ( fstObjectInput == null ) {
             streamCoderFactory.getInput().set(new FSTObjectInput(this));
             return getIn();
@@ -1124,6 +1137,16 @@ public class FSTConfiguration {
             return getObjectInput(b).readObject();
         } catch (Exception e) {
             System.out.println("unable to decode:" +new String(b,0,0,Math.min(b.length,100)) );
+            try {
+                String debug = new String(b, "UTF-8");
+            } catch (UnsupportedEncodingException e1) {
+                //
+            }
+            try {
+                getObjectInput(b).readObject();
+            } catch (Exception e1) {
+                // debug hook
+            }
             FSTUtil.<RuntimeException>rethrow(e);
         }
         return null;
@@ -1180,13 +1203,8 @@ public class FSTConfiguration {
         if ( getCoderSpecific() instanceof JsonFactory == false ) {
             return "can be called on JsonConfiguration only";
         } else {
-            try {
-                return new String(asByteArray(o),"UTF-8");
-            } catch (UnsupportedEncodingException e) {
-                FSTUtil.<RuntimeException>rethrow(e);
-            }
+            return new String(asByteArray(o), StandardCharsets.UTF_8);
         }
-        return null;
     }
 
     /**

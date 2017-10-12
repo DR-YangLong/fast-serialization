@@ -3,7 +3,9 @@ package org.nustaq.serialization.coders;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonStreamContext;
+import com.fasterxml.jackson.core.ObjectCodec;
 import com.fasterxml.jackson.core.io.SerializedString;
+import com.fasterxml.jackson.core.json.JsonWriteContext;
 import org.nustaq.serialization.*;
 import org.nustaq.serialization.util.FSTOutputStream;
 import org.nustaq.serialization.util.FSTUtil;
@@ -12,6 +14,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Array;
 import java.util.Map;
+
+import static org.nustaq.serialization.FSTObjectOutput.STRING;
 
 /**
  * Created by ruedi on 20/05/15.
@@ -166,6 +170,13 @@ public class FSTJsonEncoder implements FSTEncoder {
 
     @Override
     public void reset(byte[] outbytes) {
+        if ( gen != null ) {
+            try {
+                createGenerator();
+            } catch (Exception e) {
+                FSTUtil.<RuntimeException>rethrow(e);
+            }
+        }
         if (outbytes==null) {
             out.reset();
         } else {
@@ -386,7 +397,7 @@ public class FSTJsonEncoder implements FSTEncoder {
     }
 
     @Override
-    public void writeAttributeName(FSTClazzInfo.FSTFieldInfo subInfo) {
+    public boolean writeAttributeName(FSTClazzInfo.FSTFieldInfo subInfo, Object outerObjectToWrite) {
         try {
             SerializedString bufferedName = (SerializedString) subInfo.getBufferedName();
             if ( bufferedName == null ) {
@@ -399,9 +410,22 @@ public class FSTJsonEncoder implements FSTEncoder {
             else {
                 gen.writeFieldName(bufferedName);
             }
+            if ( subInfo.getField().isAnnotationPresent(JSONAsString.class) ) { // fixme: optimize
+                try {
+                    Object objectValue = subInfo.getObjectValue(outerObjectToWrite);
+                    if ( objectValue instanceof byte[] ) {
+                        String stringVal = new String((byte[]) objectValue, "UTF-8");
+                        writeStringUTF(stringVal);
+                        return true;
+                    }
+                } catch (IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+            }
         } catch (IOException e) {
             FSTUtil.<RuntimeException>rethrow(e);
         }
+        return false;
     }
 
     @Override

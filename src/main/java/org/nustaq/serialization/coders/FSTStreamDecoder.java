@@ -15,6 +15,7 @@
  */
 package org.nustaq.serialization.coders;
 
+import org.nustaq.logging.FSTLogger;
 import org.nustaq.serialization.FSTClazzInfo;
 import org.nustaq.serialization.FSTClazzNameRegistry;
 import org.nustaq.serialization.FSTConfiguration;
@@ -29,6 +30,7 @@ import java.io.InputStream;
  * Default Coder used for serialization. Decodes a binary stream written with FSTStreamEncoder
  */
 public class FSTStreamDecoder implements FSTDecoder {
+    private static final FSTLogger LOGGER = FSTLogger.getLogger(FSTStreamDecoder.class);
 
     private FSTInputStream input;
     byte ascStringCache[];
@@ -175,6 +177,7 @@ public class FSTStreamDecoder implements FSTDecoder {
                 throw new RuntimeException("unexpected primitive type " + componentType.getName());
             }
         } catch (IOException e) {
+            LOGGER.log(FSTLogger.Level.ERROR, "Failed to read primitive array", e);
             FSTUtil.<RuntimeException>rethrow(e);
         }
         return null;
@@ -287,6 +290,9 @@ public class FSTStreamDecoder implements FSTDecoder {
     @Override
     public final byte readFByte() throws IOException {
         input.ensureReadAhead(1);
+        if (input.pos > input.count) {
+            throw new IOException("Failed to read the next byte");
+        }
         return input.buf[input.pos++];
     }
 
@@ -569,6 +575,11 @@ public class FSTStreamDecoder implements FSTDecoder {
 
     @Override
     public void startFieldReading(Object newObj) {
+
+    }
+
+    @Override
+    public void endFieldReading(Object newObj) {
 
     }
 

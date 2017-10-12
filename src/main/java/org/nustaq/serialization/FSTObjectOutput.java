@@ -15,10 +15,12 @@
  */
 package org.nustaq.serialization;
 
+import org.nustaq.logging.FSTLogger;
 import org.nustaq.serialization.util.FSTUtil;
 
 import java.io.*;
 import java.lang.reflect.Array;
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 
 /**
@@ -34,6 +36,7 @@ import java.util.*;
  */
 public class FSTObjectOutput implements ObjectOutput {
 
+    private static final FSTLogger LOGGER = FSTLogger.getLogger(FSTObjectOutput.class);
     public static Object NULL_PLACEHOLDER = new Object() { public String toString() { return "NULL_PLACEHOLDER"; }};
     public static final byte SPECIAL_COMPATIBILITY_OBJECT_TAG = -19; // see issue 52
     public static final byte ONE_OF = -18;
@@ -65,6 +68,14 @@ public class FSTObjectOutput implements ObjectOutput {
     protected final FSTClazzInfo stringInfo;
     protected boolean isCrossPlatform;
 
+    protected ThreadLocal<FSTClazzInfo.FSTFieldInfo[]> refsLocal = new ThreadLocal() {
+        @Override
+        protected Object initialValue() {
+            return new FSTClazzInfo.FSTFieldInfo[20];
+        }
+    };
+
+    FSTClazzInfo.FSTFieldInfo[] refs;
     /**
      * Creates a new FSTObjectOutput stream to write data to the specified
      * underlying output stream.
@@ -270,7 +281,6 @@ public class FSTObjectOutput implements ObjectOutput {
     /////////////////////////////////////////////////////
     
     public void writeObject(Object obj, Class... possibles) throws IOException {
-        curDepth++;
         if ( isCrossPlatform ) {
             writeObjectInternal(obj, null); // not supported cross platform
             return;
@@ -284,10 +294,11 @@ public class FSTObjectOutput implements ObjectOutput {
         writeObjectInternal(obj, null, possibles);
     }
 
-    protected FSTClazzInfo.FSTFieldInfo refs[] = new FSTClazzInfo.FSTFieldInfo[20];
-
     //avoid creation of dummy ref
     protected FSTClazzInfo.FSTFieldInfo getCachedFI( Class... possibles ) {
+        if ( refs == null ) {
+            refs = refsLocal.get();
+        }
         if ( curDepth >= refs.length ) {
             return new FSTClazzInfo.FSTFieldInfo(possibles, null, true);
         } else {
@@ -311,9 +322,6 @@ public class FSTObjectOutput implements ObjectOutput {
      * @throws IOException
      */
     public FSTClazzInfo writeObjectInternal(Object obj, FSTClazzInfo ci, Class... possibles) throws IOException {
-        if ( curDepth == 0 ) {
-            throw new RuntimeException("not intended to be called from external application. Use public writeObject instead");
-        }
         FSTClazzInfo.FSTFieldInfo info = getCachedFI(possibles);
         curDepth++;
         FSTClazzInfo fstClazzInfo = writeObjectWithContext(info, obj, ci);
@@ -443,10 +451,21 @@ public class FSTObjectOutput implements ObjectOutput {
                         return originalInfo;
                     }
                 }
+
                 if (! writeObjectHeader(serializationInfo, referencee, toWrite) ) { // skip in case codec can write object as primitive
-                    defaultWriteObject(toWrite, serializationInfo);
-                    if ( serializationInfo.isExternalizable() )
+                    ser = serializationInfo.getSer();
+                    if ( ser == null ) {
+                        defaultWriteObject(toWrite, serializationInfo);
+                        if ( serializationInfo.isExternalizable() )
+                            getCodec().externalEnd(serializationInfo);
+                    } else {
+                        // handle edge case: there is a serializer registered for replaced class
+                        // copied from below :(
+                        int pos = getCodec().getWritten();
+                        // write object depending on type (custom, externalizable, serializable/java, default)
+                        ser.writeObject(this, toWrite, serializationInfo, referencee, pos);
                         getCodec().externalEnd(serializationInfo);
+                    }
                 }
                 return originalInfo;
             } else { // object has custom serializer
@@ -546,6 +565,9 @@ public class FSTObjectOutput implements ObjectOutput {
                 writeByte(55); // tag this is written with writeMethod
                 fstCompatibilityInfo.getWriteMethod().invoke(toWrite,getObjectOutputStream(cl, serializationInfo,referencee,toWrite));
             } catch (Exception e) {
+                if ( e instanceof InvocationTargetException == true && ((InvocationTargetException) e).getTargetException() != null ) {
+                    FSTUtil.<RuntimeException>rethrow(((InvocationTargetException) e).getTargetException());
+                }
                 FSTUtil.<RuntimeException>rethrow(e);
             }
         } else {
@@ -596,7 +618,9 @@ public class FSTObjectOutput implements ObjectOutput {
                     writeObjectFields(toWrite, serializationInfo, fieldInfo, i, subInfo.getVersion());
                     return;
                 }
-                getCodec().writeAttributeName(subInfo);
+                if ( getCodec().writeAttributeName(subInfo, toWrite) ) {
+                    continue;
+                }
                 if ( subInfo.isPrimitive() ) {
                     // speed safe
                     int integralType = subInfo.getIntegralType();
@@ -878,7 +902,7 @@ public class FSTObjectOutput implements ObjectOutput {
                 FSTClazzInfo newInfo = clinfo;
                 Object replObj = toWrite;
                 if ( newInfo.getWriteReplaceMethod() != null ) {
-                    System.out.println("WARNING: WRITE REPLACE NOT FULLY SUPPORTED");
+                    LOGGER.log(FSTLogger.Level.WARN, "WRITE REPLACE NOT FULLY SUPPORTED", null);
                     try {
                         Object replaced = newInfo.getWriteReplaceMethod().invoke(replObj);
                         if ( replaced != null && replaced != toWrite ) {

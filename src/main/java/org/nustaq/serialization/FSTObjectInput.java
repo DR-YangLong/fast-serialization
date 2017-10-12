@@ -147,6 +147,10 @@ public class FSTObjectInput implements ObjectInput {
         this.codec = codec;
     }
 
+    public boolean isClosed() {
+        return closed;
+    }
+
     protected static class CallbackEntry {
         ObjectInputValidation cb;
         int prio;
@@ -808,6 +812,7 @@ public class FSTObjectInput implements ObjectInput {
                 }
             }
         }
+        getCodec().endFieldReading(newObj);
     }
 
     protected boolean skipConditional(Object newObj, int conditional, FSTClazzInfo.FSTFieldInfo subInfo) {
@@ -963,6 +968,7 @@ public class FSTObjectInput implements ObjectInput {
         getCodec().reset();
         objects.clearForRead(conf);
         getCodec().resetToCopyOf(bytes, off, len);
+        callbacks = null; //fix memory leak on reuse from default FstConfiguration
     }
 
     public void resetForReuseUseArray(byte bytes[]) throws IOException {
@@ -975,6 +981,7 @@ public class FSTObjectInput implements ObjectInput {
         }
         objects.clearForRead(conf);
         getCodec().resetWith(bytes, len);
+        callbacks = null; //fix memory leak on reuse from default FstConfiguration
     }
 
     public final int readFInt() throws IOException {

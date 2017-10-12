@@ -84,7 +84,14 @@ public class FSTClazzInfoRegistry {
             }
         }
 
-    
+        Class[] classes = cl.getDeclaredClasses();
+        for (int i = 0; i < classes.length; i++) {
+            Class aClass = classes[i];
+            if ( ! aClass.isPrimitive() && ! aClass.isArray() ) {
+                names.add(aClass.getName());
+                addAllReferencedClasses(aClass, names,topLevelDone,filter);
+            }
+        }
 
         Class enclosingClass = cl.getEnclosingClass();
         if ( enclosingClass != null ) {
@@ -113,7 +120,6 @@ public class FSTClazzInfoRegistry {
             FSTClazzInfo res = (FSTClazzInfo) mInfos.get(c);
             if (res == null) {
                 if (c == null) {
-                    rwLock.set(false);
                     throw new NullPointerException("Class is null");
                 }
                 if ( conf.getVerifier() != null ) {
